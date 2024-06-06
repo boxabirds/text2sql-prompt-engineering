@@ -87,7 +87,7 @@ func getTextFromNode(node *blackfriday.Node) string {
 	if node.FirstChild != nil {
 		n := node.FirstChild
 		for n != nil {
-			fmt.Printf("Type: %d, Literal: '%s'\n", n.Type, string(n.Literal))
+			//fmt.Printf("Type: %d, Literal: '%s'\n", n.Type, string(n.Literal))
 			buffer.WriteString(getTextFromNode(n))
 			n = n.Next
 		}

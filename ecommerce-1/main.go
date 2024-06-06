@@ -1,15 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/csv"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/sashabaranov/go-openai"
 )
@@ -111,7 +114,7 @@ func createOpenAiClient(baseUrl string, model *string) *openai.Client {
 	return openai.NewClientWithConfig(config)
 }
 
-func rows2String(rows *sql.Rows) (string, error) {
+func rows2Json(rows *sql.Rows) (string, error) {
 	// Retrieve column names
 	cols, err := rows.Columns()
 	if err != nil {
@@ -128,12 +131,6 @@ func rows2String(rows *sql.Rows) (string, error) {
 	// Initialize a slice to hold all rows
 	allRows := make([]map[string]interface{}, 0)
 
-	// Print the header
-	header := make([]string, len(cols))
-	copy(header, cols)
-	//headerLine := strings.Join(header, "\t") + "\n"
-	//fmt.Print(headerLine)
-
 	// Iterate over rows
 	for rows.Next() {
 		rowMap := make(map[string]interface{})
@@ -142,7 +139,15 @@ func rows2String(rows *sql.Rows) (string, error) {
 		}
 
 		for i, col := range cols {
-			rowMap[col] = colVals[i]
+			// Ensure the values are properly formatted for JSON
+			var value interface{}
+			byteVal, ok := colVals[i].([]byte)
+			if ok {
+				value = string(byteVal)
+			} else {
+				value = colVals[i]
+			}
+			rowMap[col] = value
 		}
 
 		allRows = append(allRows, rowMap)
@@ -153,12 +158,71 @@ func rows2String(rows *sql.Rows) (string, error) {
 		return "", err
 	}
 
-	// Convert allRows to a string representation
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprint(allRows))
+	// Convert allRows to JSON
+	jsonData, err := json.Marshal(allRows)
+	if err != nil {
+		return "", err
+	}
 
-	return sb.String(), nil
+	//return string(jsonData), nil
+	var compactedJSON bytes.Buffer
+	err = json.Compact(&compactedJSON, jsonData)
+	if err != nil {
+		return "", err
+	}
+
+	return compactedJSON.String(), nil
+
 }
+
+// func rows2String(rows *sql.Rows) (string, error) {
+// 	// Retrieve column names
+// 	cols, err := rows.Columns()
+// 	if err != nil {
+// 		return "", err
+// 	}
+
+// 	// Prepare slices for scanning
+// 	colVals := make([]interface{}, len(cols))
+// 	scanArgs := make([]interface{}, len(colVals))
+// 	for i := range colVals {
+// 		scanArgs[i] = &colVals[i]
+// 	}
+
+// 	// Initialize a slice to hold all rows
+// 	allRows := make([]map[string]interface{}, 0)
+
+// 	// Print the header
+// 	header := make([]string, len(cols))
+// 	copy(header, cols)
+// 	//headerLine := strings.Join(header, "\t") + "\n"
+// 	//fmt.Print(headerLine)
+
+// 	// Iterate over rows
+// 	for rows.Next() {
+// 		rowMap := make(map[string]interface{})
+// 		if err := rows.Scan(scanArgs...); err != nil {
+// 			return "", err
+// 		}
+
+// 		for i, col := range cols {
+// 			rowMap[col] = colVals[i]
+// 		}
+
+// 		allRows = append(allRows, rowMap)
+// 	}
+
+// 	// Handle any errors from iterating over rows
+// 	if err := rows.Err(); err != nil {
+// 		return "", err
+// 	}
+
+// 	// Convert allRows to a string representation
+// 	var sb strings.Builder
+// 	sb.WriteString(fmt.Sprint(allRows))
+
+// 	return sb.String(), nil
+// }
 
 func stripNewlines(s string) string {
 	return strings.ReplaceAll(s, "\n", " ")
@@ -218,13 +282,13 @@ func main() {
 			predictedQuery = stripNewlines(predictedQuery)
 
 			// Execute the SQL query
-			sqlRows, err := runQuery(db, predictedQuery)
+			rows, err := db.Query(predictedQuery)
 
 			// SQL query failed so let's regenerate the query
 			// taking into account this and previous errors
 			// by including them in the message sent to the LLM, and try again.
 			if err != nil {
-				log.Printf("Error executing query so retrying '%s': %v", predictedQuery, err)
+				log.Printf("! Error executing query '%s' (%s) generating a new query", predictedQuery, err.Error())
 				failedAttempts = append(failedAttempts, FailedSqlQueryAttempt{
 					// Compress the sql query to a single line
 					SqlQuery:     predictedQuery,
@@ -234,13 +298,20 @@ func main() {
 				// generating the query was successful, so let's compare against ground truth
 			} else {
 				successfulSqlQuery = true
-				match := "different"
-				if item.SQL == predictedQuery {
-					match = "same"
-				}
+				fmt.Printf("- Ground Truth Query: '%s'\n", item.SQL)
+				fmt.Printf("- Generated Query:    '%s'\n", predictedQuery)
 
-				fmt.Printf("Ground Truth Query: '%s'\nSuccessfully Executed Predicted Query: '%s'\nResult: %s\n\n", item.SQL, predictedQuery, match)
-				fmt.Printf("SQL Rows:\n%s\n", sqlRows)
+				jsonRows, _ := rows2Json(rows)
+
+				fmt.Printf("- Ground Truth Result:%s\n", item.Result)
+				fmt.Printf("- SQL Result:         %s\n", jsonRows)
+
+				result_match := "different"
+				if item.Result == jsonRows {
+					result_match = "the same"
+				}
+				fmt.Printf("- And they are %s\n\n", result_match)
+
 			}
 		}
 
@@ -248,20 +319,6 @@ func main() {
 			log.Printf("Failed to execute a valid query after %d attempts for query '%s'.", MAX_RETRIES+1, item.Query)
 		}
 	}
-}
-
-func runQuery(db *sql.DB, sqlQuery string) (string, error) {
-	rows, err := db.Query(sqlQuery)
-	if err != nil {
-		return "", err
-	}
-	defer rows.Close()
-
-	sqlRows, err := rows2String(rows)
-	if err != nil {
-		return "", err
-	}
-	return sqlRows, nil
 }
 
 func predictSqlQueryFromNaturalLanguageQuery(client *openai.Client, model *string, maxTokens *int, systemPrompt string, query *string, seed int, failedAttempts []FailedSqlQueryAttempt) (string, error) {
@@ -275,7 +332,7 @@ func predictSqlQueryFromNaturalLanguageQuery(client *openai.Client, model *strin
 	}
 
 	// print out system prompt
-	//fmt.Printf("System Prompt:\n%s\n", systemPrompt)
+	fmt.Printf("- System Prompt:\n--------\n%s\n--------\n", strings.ReplaceAll(systemPrompt, "\n", " "))
 
 	req := openai.ChatCompletionRequest{
 		Model:       *model,
@@ -290,10 +347,10 @@ func predictSqlQueryFromNaturalLanguageQuery(client *openai.Client, model *strin
 		req.Seed = &seed
 	}
 
-	// start := time.Now()
+	start := time.Now()
 	response, err := client.CreateChatCompletion(context.Background(), req)
-	// elapsed := time.Since(start)
-	// fmt.Printf("Total Execution Time: %s\n", elapsed)
+	elapsed := time.Since(start)
+	fmt.Printf("- Query generation execution time: %s\n", elapsed)
 
 	if err != nil {
 		return "", err
