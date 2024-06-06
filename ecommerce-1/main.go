@@ -31,6 +31,12 @@ const SYSTEM_PROMPT_INSTRUCTION = `
 	no extra narrative, punctuation or delimiters.\n`
 const MAX_RETRIES = 2
 
+const (
+	boldRed   = "\033[1;31m"
+	boldGreen = "\033[1;32m"
+	reset     = "\033[0m"
+)
+
 type GroundTruthItem struct {
 	Query  string
 	SQL    string
@@ -175,68 +181,34 @@ func rows2Json(rows *sql.Rows) (string, error) {
 
 }
 
-// func rows2String(rows *sql.Rows) (string, error) {
-// 	// Retrieve column names
-// 	cols, err := rows.Columns()
-// 	if err != nil {
-// 		return "", err
-// 	}
-
-// 	// Prepare slices for scanning
-// 	colVals := make([]interface{}, len(cols))
-// 	scanArgs := make([]interface{}, len(colVals))
-// 	for i := range colVals {
-// 		scanArgs[i] = &colVals[i]
-// 	}
-
-// 	// Initialize a slice to hold all rows
-// 	allRows := make([]map[string]interface{}, 0)
-
-// 	// Print the header
-// 	header := make([]string, len(cols))
-// 	copy(header, cols)
-// 	//headerLine := strings.Join(header, "\t") + "\n"
-// 	//fmt.Print(headerLine)
-
-// 	// Iterate over rows
-// 	for rows.Next() {
-// 		rowMap := make(map[string]interface{})
-// 		if err := rows.Scan(scanArgs...); err != nil {
-// 			return "", err
-// 		}
-
-// 		for i, col := range cols {
-// 			rowMap[col] = colVals[i]
-// 		}
-
-// 		allRows = append(allRows, rowMap)
-// 	}
-
-// 	// Handle any errors from iterating over rows
-// 	if err := rows.Err(); err != nil {
-// 		return "", err
-// 	}
-
-// 	// Convert allRows to a string representation
-// 	var sb strings.Builder
-// 	sb.WriteString(fmt.Sprint(allRows))
-
-// 	return sb.String(), nil
-// }
-
 func stripNewlines(s string) string {
 	return strings.ReplaceAll(s, "\n", " ")
 }
 
 func main() {
 	// deal with command line flags first
-	model := flag.String("model", "", "Model to use for the API")
+	var modelsArg string
+	var models []string
+	flag.StringVar(&modelsArg, "models", "", "List of models separated by commas")
+
 	baseURL := flag.String("base-url", "", "Base URL for the API server")
-	//query := flag.String("query", "", "Query to use in against db")
 	maxTokens := flag.Int("max-tokens", 200, "Maximum number of tokens in the summary")
 	var seed int
 	flag.IntVar(&seed, "seed", NO_SEED, "Seed for deterministic results (optional)")
 	flag.Parse()
+
+	models = strings.Split(modelsArg, ",")
+	for i, model := range models {
+		models[i] = strings.TrimSpace(model)
+	}
+
+	// print out the list of models the user specified
+	if len(models) > 0 {
+		fmt.Printf("Models to use: %s\n", strings.Join(models, ", "))
+	} else {
+		fmt.Printf("Using default model: %s\n", DEFAULT_OLLAMA_MODEL)
+		models = []string{DEFAULT_OLLAMA_MODEL}
+	}
 
 	// ensure our db exists and has the content we want to test against
 	db, err := initialiseDb("ecommerce-autogen.db")
@@ -260,68 +232,73 @@ func main() {
 	fmt.Printf("Loaded %d ground truth items\n", len(groundTruth))
 
 	// do the AI stuff to predict the SQL query from natural language
-	client := createOpenAiClient(*baseURL, model)
-	systemPrompt := SYSTEM_PROMPT_INSTRUCTION + strings.Join(TABLES, "\n")
+	for _, model := range models {
+		fmt.Printf("\n\n=======================================\n")
+		fmt.Printf("Using model: '%s'\n", model)
+		client := createOpenAiClient(*baseURL, &model)
 
-	for _, item := range groundTruth {
-		var failedAttempts []FailedSqlQueryAttempt
-		var predictedQuery string
-		var err error
-		fmt.Printf("\n====\n")
+		systemPrompt := SYSTEM_PROMPT_INSTRUCTION + strings.Join(TABLES, "\n")
 
-		successfulSqlQuery := false
+		for _, item := range groundTruth {
+			var failedAttempts []FailedSqlQueryAttempt
+			var predictedQuery string
+			var err error
+			fmt.Printf("\n====\n")
 
-		for len(failedAttempts) <= MAX_RETRIES && !successfulSqlQuery {
-			// predict the SQL query from the natural language query
-			predictedQuery, err = predictSqlQueryFromNaturalLanguageQuery(client, model, maxTokens, systemPrompt, &item.Query, seed, failedAttempts)
-			if err != nil {
-				//log.Printf("Error predicting SQL for query '%s': %v\n", item.Query, err)
-				continue
-			}
-			// SQL statements are often multi-line but work on a single line so for readability we compress it to a single line
-			predictedQuery = stripNewlines(predictedQuery)
+			successfulSqlQuery := false
 
-			// Execute the SQL query
-			rows, err := db.Query(predictedQuery)
-
-			// SQL query failed so let's regenerate the query
-			// taking into account this and previous errors
-			// by including them in the message sent to the LLM, and try again.
-			if err != nil {
-				log.Printf("! Error executing query '%s' (%s) generating a new query", predictedQuery, err.Error())
-				failedAttempts = append(failedAttempts, FailedSqlQueryAttempt{
-					// Compress the sql query to a single line
-					SqlQuery:     predictedQuery,
-					ErrorMessage: stripNewlines(err.Error()),
-				})
-
-				// generating the query was successful, so let's compare against ground truth
-			} else {
-				successfulSqlQuery = true
-				fmt.Printf("- Ground Truth Query: '%s'\n", item.SQL)
-				fmt.Printf("- Generated Query:    '%s'\n", predictedQuery)
-
-				jsonRows, _ := rows2Json(rows)
-
-				fmt.Printf("- Ground Truth Result:%s\n", item.Result)
-				fmt.Printf("- SQL Result:         %s\n", jsonRows)
-
-				result_match := "different"
-				if item.Result == jsonRows {
-					result_match = "the same"
+			for len(failedAttempts) <= MAX_RETRIES && !successfulSqlQuery {
+				// predict the SQL query from the natural language query
+				predictedQuery, err = predictSqlQueryFromNaturalLanguageQuery(client, model, maxTokens, systemPrompt, &item.Query, seed, failedAttempts)
+				if err != nil {
+					log.Printf("Error predicting SQL for query '%s': %v\n", item.Query, err)
+					continue
 				}
-				fmt.Printf("- And they are %s\n\n", result_match)
+				// SQL statements are often multi-line but work on a single line so for readability we compress it to a single line
+				predictedQuery = stripNewlines(predictedQuery)
 
+				// Execute the SQL query
+				rows, err := db.Query(predictedQuery)
+
+				// SQL query failed so let's regenerate the query
+				// taking into account this and previous errors
+				// by including them in the message sent to the LLM, and try again.
+				if err != nil {
+					log.Printf("! Error executing query '%s' (%s) generating a new query", predictedQuery, err.Error())
+					failedAttempts = append(failedAttempts, FailedSqlQueryAttempt{
+						// Compress the sql query to a single line
+						SqlQuery:     predictedQuery,
+						ErrorMessage: stripNewlines(err.Error()),
+					})
+
+					// generating the query was successful, so let's compare against ground truth
+				} else {
+					successfulSqlQuery = true
+					fmt.Printf("- Ground Truth Query: '%s'\n", item.SQL)
+					fmt.Printf("- Generated Query:    '%s'\n", predictedQuery)
+
+					jsonRows, _ := rows2Json(rows)
+
+					fmt.Printf("- Ground Truth Result:%s\n", item.Result)
+					fmt.Printf("- SQL Result:         %s\n", jsonRows)
+
+					if item.Result == jsonRows {
+						fmt.Printf("- And they are the %ssame%s\n\n", boldGreen, reset)
+					} else {
+						fmt.Printf("- And they are %sdifferent%s\n\n", boldRed, reset)
+					}
+
+				}
 			}
-		}
 
-		if err != nil {
-			log.Printf("Failed to execute a valid query after %d attempts for query '%s'.", MAX_RETRIES+1, item.Query)
+			if err != nil {
+				log.Printf("Failed to execute a valid query after %d attempts for query '%s'.", MAX_RETRIES+1, item.Query)
+			}
 		}
 	}
 }
 
-func predictSqlQueryFromNaturalLanguageQuery(client *openai.Client, model *string, maxTokens *int, systemPrompt string, query *string, seed int, failedAttempts []FailedSqlQueryAttempt) (string, error) {
+func predictSqlQueryFromNaturalLanguageQuery(client *openai.Client, model string, maxTokens *int, systemPrompt string, query *string, seed int, failedAttempts []FailedSqlQueryAttempt) (string, error) {
 	// Modify the system prompt to include the history of failed attempts
 	//fmt.Printf("- Query: '%s'\n", *query)
 	if len(failedAttempts) > 0 {
@@ -332,10 +309,10 @@ func predictSqlQueryFromNaturalLanguageQuery(client *openai.Client, model *strin
 	}
 
 	// print out system prompt
-	fmt.Printf("- System Prompt:\n--------\n%s\n--------\n", strings.ReplaceAll(systemPrompt, "\n", " "))
+	//fmt.Printf("- System Prompt:\n--------\n%s\n--------\n", strings.ReplaceAll(systemPrompt, "\n", " "))
 
 	req := openai.ChatCompletionRequest{
-		Model:       *model,
+		Model:       model,
 		MaxTokens:   *maxTokens,
 		Temperature: 0.0,
 		Messages: []openai.ChatCompletionMessage{
