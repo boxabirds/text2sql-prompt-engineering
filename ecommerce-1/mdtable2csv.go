@@ -19,7 +19,11 @@ func convertMdWithSingleTableToCsv(fileName string) (string, error) {
 	}
 
 	// Parse the Markdown to extract the nodes
-	node := blackfriday.New(blackfriday.WithExtensions(blackfriday.Tables)).Parse(input)
+	//node := blackfriday.New(blackfriday.WithExtensions(blackfriday.Tables)).Parse(input)
+	extensions := blackfriday.WithExtensions(blackfriday.Tables | blackfriday.NoIntraEmphasis)
+
+	// Parse the Markdown to extract the nodes
+	node := blackfriday.New(extensions).Parse(input)
 
 	// Prepare to find the first table
 	var inTable bool
@@ -83,6 +87,7 @@ func getTextFromNode(node *blackfriday.Node) string {
 	if node.FirstChild != nil {
 		n := node.FirstChild
 		for n != nil {
+			fmt.Printf("Type: %d, Literal: '%s'\n", n.Type, string(n.Literal))
 			buffer.WriteString(getTextFromNode(n))
 			n = n.Next
 		}

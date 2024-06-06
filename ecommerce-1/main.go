@@ -10,7 +10,6 @@ import (
 	"log"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/sashabaranov/go-openai"
 )
@@ -27,11 +26,17 @@ const SYSTEM_PROMPT_INSTRUCTION = `
 	no UPDATE, INSERT, DELETE or any other statements that attempt to change the data. 
 	Respond to questions in a way that can be interpreted programmatically: 
 	no extra narrative, punctuation or delimiters.\n`
+const MAX_RETRIES = 2
 
 type GroundTruthItem struct {
 	Query  string
 	SQL    string
 	Result string
+}
+
+type FailedSqlQueryAttempt struct {
+	SqlQuery     string
+	ErrorMessage string
 }
 
 func loadGroundTruthCsv(filename string) ([]GroundTruthItem, error) {
@@ -85,7 +90,7 @@ func createOpenAiClient(baseUrl string, model *string) *openai.Client {
 		}
 		fmt.Printf("Using default OpenAI API server\n")
 	} else {
-		fmt.Printf("=== NOTE AS OF 28 May 2024 Ollama does not appear to use the seed to make output deterministic.===")
+		//fmt.Printf("=== NOTE AS OF 28 May 2024 Ollama does not appear to use the seed to make output deterministic.===")
 		apiKey = OLLAMA_API_KEY
 		if *model == "" {
 			*model = DEFAULT_OLLAMA_MODEL
@@ -126,8 +131,8 @@ func rows2String(rows *sql.Rows) (string, error) {
 	// Print the header
 	header := make([]string, len(cols))
 	copy(header, cols)
-	headerLine := strings.Join(header, "\t") + "\n"
-	fmt.Print(headerLine)
+	//headerLine := strings.Join(header, "\t") + "\n"
+	//fmt.Print(headerLine)
 
 	// Iterate over rows
 	for rows.Next() {
@@ -153,6 +158,10 @@ func rows2String(rows *sql.Rows) (string, error) {
 	sb.WriteString(fmt.Sprint(allRows))
 
 	return sb.String(), nil
+}
+
+func stripNewlines(s string) string {
+	return strings.ReplaceAll(s, "\n", " ")
 }
 
 func main() {
@@ -191,28 +200,53 @@ func main() {
 	systemPrompt := SYSTEM_PROMPT_INSTRUCTION + strings.Join(TABLES, "\n")
 
 	for _, item := range groundTruth {
-		// Generate predicted SQL query
-		predictedQuery, err := predictSqlQueryFromNaturalLanguageQuery(model, maxTokens, systemPrompt, &item.Query, seed, client)
+		var failedAttempts []FailedSqlQueryAttempt
+		var predictedQuery string
+		var err error
+		fmt.Printf("\n====\n")
+
+		successfulSqlQuery := false
+
+		for len(failedAttempts) <= MAX_RETRIES && !successfulSqlQuery {
+			// predict the SQL query from the natural language query
+			predictedQuery, err = predictSqlQueryFromNaturalLanguageQuery(client, model, maxTokens, systemPrompt, &item.Query, seed, failedAttempts)
+			if err != nil {
+				//log.Printf("Error predicting SQL for query '%s': %v\n", item.Query, err)
+				continue
+			}
+			// SQL statements are often multi-line but work on a single line so for readability we compress it to a single line
+			predictedQuery = stripNewlines(predictedQuery)
+
+			// Execute the SQL query
+			sqlRows, err := runQuery(db, predictedQuery)
+
+			// SQL query failed so let's regenerate the query
+			// taking into account this and previous errors
+			// by including them in the message sent to the LLM, and try again.
+			if err != nil {
+				log.Printf("Error executing query so retrying '%s': %v", predictedQuery, err)
+				failedAttempts = append(failedAttempts, FailedSqlQueryAttempt{
+					// Compress the sql query to a single line
+					SqlQuery:     predictedQuery,
+					ErrorMessage: stripNewlines(err.Error()),
+				})
+
+				// generating the query was successful, so let's compare against ground truth
+			} else {
+				successfulSqlQuery = true
+				match := "different"
+				if item.SQL == predictedQuery {
+					match = "same"
+				}
+
+				fmt.Printf("Ground Truth Query: '%s'\nSuccessfully Executed Predicted Query: '%s'\nResult: %s\n\n", item.SQL, predictedQuery, match)
+				fmt.Printf("SQL Rows:\n%s\n", sqlRows)
+			}
+		}
+
 		if err != nil {
-			log.Printf("Error predicting SQL for query '%s': %v\n", item.Query, err)
-			continue
+			log.Printf("Failed to execute a valid query after %d attempts for query '%s'.", MAX_RETRIES+1, item.Query)
 		}
-
-		// Compare ground truth with predicted query
-		match := "different"
-		if item.SQL == predictedQuery {
-			match = "same"
-		}
-
-		fmt.Printf("====\n")
-		fmt.Printf("Ground Truth Query: '%s'\nPredicted Query: '%s'\nResult: %s\n\n", item.SQL, predictedQuery, match)
-		sqlRows, err := runQuery(db, item.SQL)
-		if err != nil {
-			log.Printf("Error executing query '%s': %v", item.SQL, err)
-			continue
-		}
-
-		fmt.Printf("SQL Rows:\n%s\n", sqlRows)
 	}
 }
 
@@ -230,8 +264,19 @@ func runQuery(db *sql.DB, sqlQuery string) (string, error) {
 	return sqlRows, nil
 }
 
-func predictSqlQueryFromNaturalLanguageQuery(model *string, maxTokens *int, systemPrompt string, query *string, seed int, client *openai.Client) (string, error) {
-	fmt.Printf("Query: %s\n", *query)
+func predictSqlQueryFromNaturalLanguageQuery(client *openai.Client, model *string, maxTokens *int, systemPrompt string, query *string, seed int, failedAttempts []FailedSqlQueryAttempt) (string, error) {
+	// Modify the system prompt to include the history of failed attempts
+	//fmt.Printf("- Query: '%s'\n", *query)
+	if len(failedAttempts) > 0 {
+		systemPrompt += "\nTake into account the following past failed attempts at generating a SQL query when creating the query to avoid the same mistakes:\n"
+		for _, attempt := range failedAttempts {
+			systemPrompt += fmt.Sprintf("Generated failed sql query: '%s'; Error message explaining why it failed: '%s'\n", strings.ReplaceAll(attempt.SqlQuery, "\n", " "), strings.ReplaceAll(attempt.ErrorMessage, "\n", " "))
+		}
+	}
+
+	// print out system prompt
+	//fmt.Printf("System Prompt:\n%s\n", systemPrompt)
+
 	req := openai.ChatCompletionRequest{
 		Model:       *model,
 		MaxTokens:   *maxTokens,
@@ -242,21 +287,17 @@ func predictSqlQueryFromNaturalLanguageQuery(model *string, maxTokens *int, syst
 		},
 	}
 	if seed != NO_SEED {
-		fmt.Printf("Using fixed seed: %d\n", seed)
 		req.Seed = &seed
 	}
 
-	start := time.Now()
-	ctx := context.Background()
-	response, err := client.CreateChatCompletion(ctx, req)
-	elapsed := time.Since(start)
-	fmt.Printf("Total Execution Time: %s\n", elapsed)
+	// start := time.Now()
+	response, err := client.CreateChatCompletion(context.Background(), req)
+	// elapsed := time.Since(start)
+	// fmt.Printf("Total Execution Time: %s\n", elapsed)
+
 	if err != nil {
-		fmt.Printf("ChatCompletion error: %v\n", err)
 		return "", err
 	}
 
-	sqlQuery := response.Choices[0].Message.Content
-	fmt.Printf("SQL Query:\n%s\n", sqlQuery)
-	return sqlQuery, nil
+	return response.Choices[0].Message.Content, nil
 }
