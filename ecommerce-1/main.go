@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/sashabaranov/go-openai"
+	"github.com/tmc/langchaingo/llms"
 )
 
 const GROUND_TRUTH_MD_FILE = "ground-truth.md"
@@ -28,7 +29,7 @@ const SYSTEM_PROMPT_INSTRUCTION = `
 	Generate only queries that access data, not modify it: 
 	no UPDATE, INSERT, DELETE or any other statements that attempt to change the data. 
 	Respond to questions in a way that can be interpreted programmatically: 
-	no extra narrative, punctuation or delimiters.\n`
+	no extra narrative, punctuation, delimiters or escape sequences like backticks.\n`
 const MAX_RETRIES = 2
 
 const (
@@ -187,9 +188,6 @@ func stripNewlines(s string) string {
 
 func main() {
 	// deal with command line flags first
-	var modelsArg string
-	var models []string
-	flag.StringVar(&modelsArg, "models", "", "List of models separated by commas")
 
 	baseURL := flag.String("base-url", "", "Base URL for the API server")
 	maxTokens := flag.Int("max-tokens", 200, "Maximum number of tokens in the summary")
@@ -197,17 +195,11 @@ func main() {
 	flag.IntVar(&seed, "seed", NO_SEED, "Seed for deterministic results (optional)")
 	flag.Parse()
 
-	models = strings.Split(modelsArg, ",")
-	for i, model := range models {
-		models[i] = strings.TrimSpace(model)
-	}
-
-	// print out the list of models the user specified
-	if len(models) > 0 {
-		fmt.Printf("Models to use: %s\n", strings.Join(models, ", "))
-	} else {
-		fmt.Printf("Using default model: %s\n", DEFAULT_OLLAMA_MODEL)
-		models = []string{DEFAULT_OLLAMA_MODEL}
+	llmInitializers := getLLMs(*baseURL)
+	// print out the initialisers: name and model
+	for _, llm := range llmInitializers {
+		fmt.Printf("LLM: %s\n", llm.Name)
+		fmt.Printf("Model: %s\n", llm.Model)
 	}
 
 	// ensure our db exists and has the content we want to test against
@@ -221,7 +213,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("Ensured we have a ground truth csv in '%s'\n", groundTruthCsvFile)
+	//fmt.Printf("Ensured we have a ground truth csv in '%s'\n", groundTruthCsvFile)
 
 	// load the ground truth
 	groundTruth, err := loadGroundTruthCsv(groundTruthCsvFile)
@@ -232,10 +224,14 @@ func main() {
 	fmt.Printf("Loaded %d ground truth items\n", len(groundTruth))
 
 	// do the AI stuff to predict the SQL query from natural language
-	for _, model := range models {
+	for _, llmInitializer := range llmInitializers {
 		fmt.Printf("\n\n=======================================\n")
-		fmt.Printf("Using model: '%s'\n", model)
-		client := createOpenAiClient(*baseURL, &model)
+		fmt.Printf("Using model: %s %s\n", llmInitializer.Name, llmInitializer.Model)
+		client, err := llmInitializer.InitFunc()
+		if err != nil {
+			log.Fatalf("Failed to initialize model '%s', skipping: %v", llmInitializer.Model, err)
+			continue
+		}
 
 		systemPrompt := SYSTEM_PROMPT_INSTRUCTION + strings.Join(TABLES, "\n")
 
@@ -243,16 +239,18 @@ func main() {
 			var failedAttempts []FailedSqlQueryAttempt
 			var predictedQuery string
 			var err error
-			fmt.Printf("\n====\n")
+			fmt.Printf("\n==== %s: %s\n", llmInitializer.Name, llmInitializer.Model)
 
 			successfulSqlQuery := false
 
 			for len(failedAttempts) <= MAX_RETRIES && !successfulSqlQuery {
 				// predict the SQL query from the natural language query
-				predictedQuery, err = predictSqlQueryFromNaturalLanguageQuery(client, model, maxTokens, systemPrompt, &item.Query, seed, failedAttempts)
+				// print out the natural query
+				fmt.Printf("Query: %s\n", item.Query)
+				predictedQuery, err = predictSqlQueryFromNaturalLanguageQuery(client, maxTokens, systemPrompt, &item.Query, seed, failedAttempts)
 				if err != nil {
 					log.Printf("Error predicting SQL for query '%s': %v\n", item.Query, err)
-					continue
+					break
 				}
 				// SQL statements are often multi-line but work on a single line so for readability we compress it to a single line
 				predictedQuery = stripNewlines(predictedQuery)
@@ -291,41 +289,37 @@ func main() {
 				}
 			}
 
-			if err != nil {
+			if !successfulSqlQuery {
 				log.Printf("Failed to execute a valid query after %d attempts for query '%s'.", MAX_RETRIES+1, item.Query)
 			}
 		}
 	}
 }
 
-func predictSqlQueryFromNaturalLanguageQuery(client *openai.Client, model string, maxTokens *int, systemPrompt string, query *string, seed int, failedAttempts []FailedSqlQueryAttempt) (string, error) {
+func predictSqlQueryFromNaturalLanguageQuery(llm llms.Model, maxTokens *int, systemPrompt string, query *string, seed int, failedAttempts []FailedSqlQueryAttempt) (string, error) {
 	// Modify the system prompt to include the history of failed attempts
 	//fmt.Printf("- Query: '%s'\n", *query)
 	if len(failedAttempts) > 0 {
-		systemPrompt += "\nTake into account the following past failed attempts at generating a SQL query when creating the query to avoid the same mistakes:\n"
+		systemPrompt += "\nTake into account the following past failed attempts at generating a new SQL query that avoids the same errors:\n"
 		for _, attempt := range failedAttempts {
-			systemPrompt += fmt.Sprintf("Generated failed sql query: '%s'; Error message explaining why it failed: '%s'\n", strings.ReplaceAll(attempt.SqlQuery, "\n", " "), strings.ReplaceAll(attempt.ErrorMessage, "\n", " "))
+			systemPrompt += fmt.Sprintf("Generated failed sql query: '%s';\nError message explaining why it failed:\n'%s'\n", strings.ReplaceAll(attempt.SqlQuery, "\n", " "), strings.ReplaceAll(attempt.ErrorMessage, "\n", " "))
 		}
 	}
 
 	// print out system prompt
 	//fmt.Printf("- System Prompt:\n--------\n%s\n--------\n", strings.ReplaceAll(systemPrompt, "\n", " "))
 
-	req := openai.ChatCompletionRequest{
-		Model:       model,
-		MaxTokens:   *maxTokens,
-		Temperature: 0.0,
-		Messages: []openai.ChatCompletionMessage{
-			{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
-			{Role: openai.ChatMessageRoleUser, Content: *query},
-		},
+	ctx := context.Background()
+	options := []llms.CallOption{
+		llms.WithMaxTokens(*maxTokens),
+		llms.WithTemperature(0.0),
 	}
 	if seed != NO_SEED {
-		req.Seed = &seed
+		options = append(options, llms.WithSeed(seed))
 	}
 
 	start := time.Now()
-	response, err := client.CreateChatCompletion(context.Background(), req)
+	response, err := llms.GenerateFromSinglePrompt(ctx, llm, systemPrompt+"\n"+*query, options...)
 	elapsed := time.Since(start)
 	fmt.Printf("- Query generation execution time: %s\n", elapsed)
 
@@ -333,5 +327,5 @@ func predictSqlQueryFromNaturalLanguageQuery(client *openai.Client, model string
 		return "", err
 	}
 
-	return response.Choices[0].Message.Content, nil
+	return response, nil
 }
