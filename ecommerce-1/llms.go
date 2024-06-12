@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"os"
 
 	"github.com/tmc/langchaingo/llms"
@@ -22,110 +24,226 @@ const (
 	Open
 )
 
-type NamedLLMInitializer struct {
+const SERVICE_MODEL_SEPERATOR = " : "
+
+type LLMClient struct {
 	Name                   string
 	Model                  string
-	InitFunc               func() (llms.Model, error)
 	WeightsAccess          WeightsAccessType
 	NumParameters          string
 	InputContextWindowSize int
+	Instance               llms.Model
 }
 
-func getLLMs(localServerUrl string) []NamedLLMInitializer {
+// Simple wrapper to get a specific named LLM initializer for whatever mischief we get up to with it.
+func getLLMClient(name, model string) *LLMClient {
+	key := fmt.Sprintf("%s%s%s", name, SERVICE_MODEL_SEPERATOR, model)
+	return clientsMap[key]
+}
 
-	//ctx := context.Background()
+// List of all the clients we use
+var clientsMap = make(map[string]*LLMClient)
 
-	llmInitializers := []NamedLLMInitializer{
-
-		// https://huggingface.co/meta-llama/Meta-Llama-3-8B
-		{Name: "Ollama/OpenAI", Model: "llama3", WeightsAccess: Open, NumParameters: "8b", InputContextWindowSize: 8192, InitFunc: func() (llms.Model, error) {
-			return openai.New(openai.WithModel("llama3:instruct"), openai.WithBaseURL(localServerUrl))
-		}},
-
-		{Name: "Groq", Model: "llama3-8b-8192", WeightsAccess: Open, NumParameters: "8b", InputContextWindowSize: 8192, InitFunc: func() (llms.Model, error) {
-			return openai.New(
-				openai.WithModel("llama3-8b-8192"),
-				openai.WithBaseURL("https://api.groq.com/openai/v1"),
-				openai.WithToken(os.Getenv("GROQ_API_KEY")),
-			)
-		}},
-
-		// https://mistral.ai/news/codestral/
-		{Name: "Ollama/OpenAI", Model: "codestral-22B-v0.1", WeightsAccess: Open, NumParameters: "22b", InputContextWindowSize: 32768, InitFunc: func() (llms.Model, error) {
-			return openai.New(openai.WithModel("codestral"), openai.WithBaseURL(localServerUrl))
-		}},
-
-		// https://ollama.com/library/phi3
-		{Name: "Ollama/OpenAI", Model: "phi3:mini", WeightsAccess: Open, NumParameters: "3.8b", InputContextWindowSize: 4096, InitFunc: func() (llms.Model, error) {
-			return openai.New(openai.WithModel("phi3:mini"), openai.WithBaseURL(localServerUrl))
-		}},
-		// https://ollama.com/library/phi3
-		{Name: "Ollama/OpenAI", Model: "phi3:medium", WeightsAccess: Open, NumParameters: "14b", InputContextWindowSize: 4096, InitFunc: func() (llms.Model, error) {
-			return openai.New(openai.WithModel("phi3:medium"), openai.WithBaseURL(localServerUrl))
-		}},
-		// https://ollama.com/library/phi3
-		{Name: "Ollama/OpenAI", Model: "phi3:medium-128k", WeightsAccess: Open, NumParameters: "14b", InputContextWindowSize: 131072, InitFunc: func() (llms.Model, error) {
-			return openai.New(openai.WithModel("phi3:medium-128k"), openai.WithBaseURL(localServerUrl))
-		}},
-
-		// https://docs.cohere.com/docs/models
-		// looking for environment variable COHERE_API_KEY via coherellm_option.go/tokenEnvVarName
-		{Name: "Cohere", Model: "Command-R+", WeightsAccess: Open, NumParameters: "104b", InputContextWindowSize: 131072, InitFunc: func() (llms.Model, error) {
-			return cohere.New(
-				cohere.WithModel("command-r-plus"),
-				cohere.WithToken(os.Getenv("COHERE_API_KEY")),
-			)
-		}},
-
-		{Name: "Groq", Model: "llama3-70b-8192", WeightsAccess: Open, NumParameters: "70b", InputContextWindowSize: 8192, InitFunc: func() (llms.Model, error) {
-			return openai.New(openai.WithModel("llama3-70b-8192"), openai.WithBaseURL("https://api.groq.com/openai/v1"))
-		}},
-
-		// https://docs.anthropic.com/en/docs/models-overview
-		// environment variable required to be set: ANTHROPIC_API_KEY
-		{Name: "Anthropic", Model: "claude-3-haiku-20240307", WeightsAccess: Closed, NumParameters: "?", InputContextWindowSize: 4096, InitFunc: func() (llms.Model, error) {
-			return anthropic.New(anthropic.WithModel("claude-3-haiku-20240307"))
-		}},
-
-		// https://docs.anthropic.com/en/docs/models-overview
-		// environment variable required to be set: ANTHROPIC_API_KEY
-		{Name: "Anthropic", Model: "claude-3-sonnet-20240229", WeightsAccess: Closed, NumParameters: "?", InputContextWindowSize: 4096, InitFunc: func() (llms.Model, error) {
-			return anthropic.New(anthropic.WithModel("claude-3-sonnet-20240229"))
-		}},
-
-		// https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versioning
-		{Name: "Google AI", Model: "Gemini Flash 1.5", WeightsAccess: Closed, NumParameters: "?", InputContextWindowSize: 1048576, InitFunc: func() (llms.Model, error) {
-			apiKey := os.Getenv("GEMINI_API_KEY")
-			return googleai.New(context.Background(),
-				googleai.WithAPIKey(apiKey),
-				googleai.WithDefaultModel("gemini-1.5-flash-001"))
-		}},
-
-		// https://github.com/meta-llama/llama3/blob/main/MODEL_CARD.md
-		// TODO {Name: "HuggingFace", InitFunc: func() (llms.Model, error) {
-		// 	return huggingface.New()
-		// }},
-
-		// TODO {Name: "Llamafile", InitFunc: func() (llms.Model, error) {
-		// 	options := []llamafile.Option{
-		// 		llamafile.WithEmbeddingSize(2048),
-		// 		llamafile.WithTemperature(0.8),
-		// 	}
-		// 	return llamafile.New(options...)
-		// }},
-		// {Name: "Mistral", InitFunc: func() (llms.Model, error) {
-		// 	return mistral.New(mistral.WithModel("open-mistral-7b"))
-		// }},
-
-		// TODO {Name: "Ollama", InitFunc: func() (llms.Model, error) {
-		// 	return ollama.New(ollama.WithModel("llama3:instruct"))
-		// }},
-
-		// // https://platform.openai.com/docs/models/gpt-4-turbo-and-gpt-4
-		{Name: "OpenAI GPT-4-turbo-preview", InitFunc: func() (llms.Model, error) {
-			return openai.New(openai.WithModel("gpt-4-turbo-preview"))
-		}},
+func initialiseLLMClients(localServerUrl string) []LLMClient {
+	clients := []LLMClient{
+		{
+			Name: "Ollama/OpenAI", Model: "llama3", WeightsAccess: Open, NumParameters: "8b", InputContextWindowSize: 8192,
+			Instance: func() llms.Model {
+				model, err := openai.New(openai.WithModel("llama3:instruct"), openai.WithBaseURL(localServerUrl))
+				if err != nil {
+					log.Printf("Error initializing model %s: %v", "llama3", err)
+					return nil
+				}
+				return model
+			}(),
+		},
+		{
+			Name: "Groq", Model: "llama3-8b-8192", WeightsAccess: Open, NumParameters: "8b", InputContextWindowSize: 8192,
+			Instance: func() llms.Model {
+				model, err := openai.New(
+					openai.WithModel("llama3-8b-8192"),
+					openai.WithBaseURL("https://api.groq.com/openai/v1"),
+					openai.WithToken(os.Getenv("GROQ_API_KEY")),
+				)
+				if err != nil {
+					log.Printf("Error initializing model %s: %v", "llama3-8b-8192", err)
+					return nil
+				}
+				return model
+			}(),
+		},
+		{
+			Name: "Groq", Model: "llama3-70b-8192", WeightsAccess: Open, NumParameters: "70b", InputContextWindowSize: 8192,
+			Instance: func() llms.Model {
+				model, err := openai.New(
+					openai.WithModel("llama3-70b-8192"),
+					openai.WithBaseURL("https://api.groq.com/openai/v1"),
+					openai.WithToken(os.Getenv("GROQ_API_KEY")),
+				)
+				if err != nil {
+					log.Printf("Error initializing model %s: %v", "llama3-70b-8192", err)
+					return nil
+				}
+				return model
+			}(),
+		},
+		// {
+		// 	Name: "Mistral", Model: "llama3-70b-8192", WeightsAccess: Open, NumParameters: "70b", InputContextWindowSize: 8192,
+		// 	Instance: func() llms.Model {
+		// 		model, err := openai.New(
+		// 			openai.WithModel("llama3-70b-8192"),
+		// 			openai.WithBaseURL("TODO"),
+		// 			openai.WithToken(os.Getenv("MISTRAL_API_KEY")),
+		// 		)
+		// 		if err != nil {
+		// 			log.Printf("Error initializing model %s: %v", "llama3-70b-8192", err)
+		// 			return nil
+		// 		}
+		// 		return model
+		// 	}(),
+		// },
+		{
+			Name: "Ollama/OpenAI", Model: "codestral-22B-v0.1", WeightsAccess: Open, NumParameters: "22b", InputContextWindowSize: 32768,
+			Instance: func() llms.Model {
+				model, err := openai.New(openai.WithModel("codestral"), openai.WithBaseURL(localServerUrl))
+				if err != nil {
+					log.Printf("Error initializing model %s: %v", "codestral-22B-v0.1", err)
+					return nil
+				}
+				return model
+			}(),
+		},
+		{
+			Name: "Ollama/OpenAI", Model: "phi3:mini", WeightsAccess: Open, NumParameters: "3.8b", InputContextWindowSize: 4096,
+			Instance: func() llms.Model {
+				model, err := openai.New(openai.WithModel("phi3:mini"), openai.WithBaseURL(localServerUrl))
+				if err != nil {
+					log.Printf("Error initializing model %s: %v", "phi3:mini", err)
+					return nil
+				}
+				return model
+			}(),
+		},
+		{
+			Name: "Ollama/OpenAI", Model: "phi3:medium", WeightsAccess: Open, NumParameters: "14b", InputContextWindowSize: 4096,
+			Instance: func() llms.Model {
+				model, err := openai.New(openai.WithModel("phi3:medium"), openai.WithBaseURL(localServerUrl))
+				if err != nil {
+					log.Printf("Error initializing model %s: %v", "phi3:medium", err)
+					return nil
+				}
+				return model
+			}(),
+		},
+		{
+			Name: "Ollama/OpenAI", Model: "phi3:medium-128k", WeightsAccess: Open, NumParameters: "14b", InputContextWindowSize: 131072,
+			Instance: func() llms.Model {
+				model, err := openai.New(openai.WithModel("phi3:medium-128k"), openai.WithBaseURL(localServerUrl))
+				if err != nil {
+					log.Printf("Error initializing model %s: %v", "phi3:medium-128k", err)
+					return nil
+				}
+				return model
+			}(),
+		},
+		{
+			Name: "Cohere", Model: "Command-R+", WeightsAccess: Open, NumParameters: "104b", InputContextWindowSize: 131072,
+			Instance: func() llms.Model {
+				model, err := cohere.New(
+					cohere.WithModel("command-r-plus"),
+					cohere.WithToken(os.Getenv("COHERE_API_KEY")),
+				)
+				if err != nil {
+					log.Printf("Error initializing model %s: %v", "Command-R+", err)
+					return nil
+				}
+				return model
+			}(),
+		},
+		{
+			Name: "Anthropic", Model: "claude-3-haiku-20240307", WeightsAccess: Closed, NumParameters: "?", InputContextWindowSize: 4096,
+			Instance: func() llms.Model {
+				model, err := anthropic.New(anthropic.WithModel("claude-3-haiku-20240307"))
+				if err != nil {
+					log.Printf("Error initializing model %s: %v", "claude-3-haiku-20240307", err)
+					return nil
+				}
+				return model
+			}(),
+		},
+		{
+			Name: "Anthropic", Model: "claude-3-sonnet-20240229", WeightsAccess: Closed, NumParameters: "?", InputContextWindowSize: 4096,
+			Instance: func() llms.Model {
+				model, err := anthropic.New(anthropic.WithModel("claude-3-sonnet-20240229"))
+				if err != nil {
+					log.Printf("Error initializing model %s: %v", "claude-3-sonnet-20240229", err)
+					return nil
+				}
+				return model
+			}(),
+		},
+		{
+			Name: "Google AI", Model: "Gemini Flash 1.5", WeightsAccess: Closed, NumParameters: "?", InputContextWindowSize: 1048576,
+			Instance: func() llms.Model {
+				apiKey := os.Getenv("GEMINI_API_KEY")
+				model, err := googleai.New(context.Background(),
+					googleai.WithAPIKey(apiKey),
+					googleai.WithDefaultModel("gemini-1.5-flash-001"))
+				if err != nil {
+					log.Printf("Error initializing model %s: %v", "Gemini Flash 1.5", err)
+					return nil
+				}
+				return model
+			}(),
+		},
+		// {
+		// 	Name: "HuggingFace", Model: "Meta-Llama-3-8B", WeightsAccess: Open, NumParameters: "8b", InputContextWindowSize: 8192,
+		// 	Instance: func() llms.Model {
+		// 		model, err := huggingface.New(huggingface.WithModel("Meta-Llama-3-8B"))
+		// 		if err != nil {
+		// 			log.Printf("Error initializing model %s: %v", "Meta-Llama-3-8B", err)
+		// 			return nil
+		// 		}
+		// 		return model
+		// 	}(),
+		// },
+		// {
+		// 	Name: "Llamafile", Model: "open-mistral-7b", WeightsAccess: Open, NumParameters: "7b", InputContextWindowSize: 8192,
+		// 	Instance: func() llms.Model {
+		// 		options := []llamafile.Option{
+		// 			llamafile.WithEmbeddingSize(2048),
+		// 			llamafile.WithTemperature(0.8),
+		// 		}
+		// 		model, err := llamafile.New(options...)
+		// 		if err != nil {
+		// 			log.Printf("Error initializing model %s: %v", "open-mistral-7b", err)
+		// 			return nil
+		// 		}
+		// 		return model
+		// 	}(),
+		// },
+		// {
+		// 	Name: "Ollama", Model: "llama3:instruct", WeightsAccess: Open, NumParameters: "8b", InputContextWindowSize: 8192,
+		// 	Instance: func() llms.Model {
+		// 		model, err := ollama.New(ollama.WithModel("llama3:instruct"))
+		// 		if err != nil {
+		// 			log.Printf("Error initializing model %s: %v", "llama3:instruct", err)
+		// 			return nil
+		// 		}
+		// 		return model
+		// 	}(),
+		// },
+		{
+			Name: "OpenAI GPT-4-turbo-preview", Model: "gpt-4-turbo-preview", WeightsAccess: Open, NumParameters: "?", InputContextWindowSize: 8192,
+			Instance: func() llms.Model {
+				model, err := openai.New(openai.WithModel("gpt-4-turbo-preview"))
+				if err != nil {
+					log.Printf("Error initializing model %s: %v", "gpt-4-turbo-preview", err)
+					return nil
+				}
+				return model
+			}(),
+		},
 	}
-
-	return llmInitializers
+	return clients
 }

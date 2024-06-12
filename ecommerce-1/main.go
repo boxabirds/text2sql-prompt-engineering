@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
@@ -12,10 +11,8 @@ import (
 	"log"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/sashabaranov/go-openai"
-	"github.com/tmc/langchaingo/llms"
 )
 
 const GROUND_TRUTH_MD_FILE = "ground-truth.md"
@@ -24,19 +21,14 @@ const DEFAULT_OPENAI_MODEL = "gpt-4-preview"
 const DEFAULT_OLLAMA_MODEL = "llama3:instruct"
 const OLLAMA_API_KEY = "ollama"
 const NO_SEED = -1
-const SYSTEM_PROMPT_INSTRUCTION = `
-	You are a READ ONLY SQL SELECT Statement Generator API for the schema below ONLY. 
-	Generate only queries that access data, not modify it: 
-	no UPDATE, INSERT, DELETE or any other statements that attempt to change the data. 
-	Respond to questions in a way that can be interpreted programmatically: 
-	no extra narrative, punctuation, delimiters or escape sequences like backticks.\n`
-const MAX_RETRIES = 2
 
 const (
 	boldRed   = "\033[1;31m"
 	boldGreen = "\033[1;32m"
 	reset     = "\033[0m"
 )
+
+// Determine what kind of match we have between the ground truth and the generated SQL query.
 
 type GroundTruthItem struct {
 	Query  string
@@ -87,8 +79,8 @@ func loadGroundTruthCsv(filename string) ([]GroundTruthItem, error) {
 
 	return groundTruth, nil
 }
-func createOpenAiClient(baseUrl string, model *string) *openai.Client {
 
+func createOpenAiClient(baseUrl string, model *string) *openai.Client {
 	var apiKey string
 	if baseUrl == "" {
 		apiKey = os.Getenv("OPENAI_API_KEY")
@@ -121,6 +113,7 @@ func createOpenAiClient(baseUrl string, model *string) *openai.Client {
 	return openai.NewClientWithConfig(config)
 }
 
+// Take some Row rules and conver them to JSON format for easy parsing
 func rows2Json(rows *sql.Rows) (string, error) {
 	// Retrieve column names
 	cols, err := rows.Columns()
@@ -195,12 +188,16 @@ func main() {
 	flag.IntVar(&seed, "seed", NO_SEED, "Seed for deterministic results (optional)")
 	flag.Parse()
 
-	llmInitializers := getLLMs(*baseURL)
+	llmClients := initialiseLLMClients(*baseURL)
 	// print out the initialisers: name and model
-	for _, llm := range llmInitializers {
+	for _, llm := range llmClients {
 		fmt.Printf("LLM: %s\n", llm.Name)
 		fmt.Printf("Model: %s\n", llm.Model)
 	}
+
+	// for our evaluation we use one of the SOTA models
+	LLMevaluator := getLLMClient("Ollama/OpenAI", "phi3:medium", llmClients)
+	fmt.Printf("Evaluator selected %s %s\n", LLMevaluator.Name, LLMevaluator.Model)
 
 	// ensure our db exists and has the content we want to test against
 	db, err := initialiseDb("ecommerce-autogen.db")
@@ -224,7 +221,7 @@ func main() {
 	fmt.Printf("Loaded %d ground truth items\n", len(groundTruth))
 
 	// do the AI stuff to predict the SQL query from natural language
-	for _, llmInitializer := range llmInitializers {
+	for _, llmInitializer := range llmClients {
 		fmt.Printf("\n\n=======================================\n")
 		fmt.Printf("Using model: %s %s\n", llmInitializer.Name, llmInitializer.Model)
 		client, err := llmInitializer.InitFunc()
@@ -233,11 +230,11 @@ func main() {
 			continue
 		}
 
-		systemPrompt := SYSTEM_PROMPT_INSTRUCTION + strings.Join(TABLES, "\n")
+		systemPrompt := SQL_GENERATOR_API_SYSTEM_PROMPT + strings.Join(TABLES, "\n")
 
 		for _, item := range groundTruth {
 			var failedAttempts []FailedSqlQueryAttempt
-			var predictedQuery string
+			var predictedSqlQuery string
 			var err error
 			fmt.Printf("\n==== %s: %s\n", llmInitializer.Name, llmInitializer.Model)
 
@@ -247,25 +244,25 @@ func main() {
 				// predict the SQL query from the natural language query
 				// print out the natural query
 				fmt.Printf("Query: %s\n", item.Query)
-				predictedQuery, err = predictSqlQueryFromNaturalLanguageQuery(client, maxTokens, systemPrompt, &item.Query, seed, failedAttempts)
+				predictedSqlQuery, err = predictSqlQueryFromNaturalLanguageQuery(client, maxTokens, systemPrompt, &item.Query, seed, failedAttempts)
 				if err != nil {
 					log.Printf("Error predicting SQL for query '%s': %v\n", item.Query, err)
 					break
 				}
 				// SQL statements are often multi-line but work on a single line so for readability we compress it to a single line
-				predictedQuery = stripNewlines(predictedQuery)
+				predictedSqlQuery = stripNewlines(predictedSqlQuery)
 
 				// Execute the SQL query
-				rows, err := db.Query(predictedQuery)
+				rows, err := db.Query(predictedSqlQuery)
 
 				// SQL query failed so let's regenerate the query
 				// taking into account this and previous errors
 				// by including them in the message sent to the LLM, and try again.
 				if err != nil {
-					log.Printf("! Error executing query '%s' (%s) generating a new query", predictedQuery, err.Error())
+					log.Printf("! Error executing query '%s' (%s) generating a new query", predictedSqlQuery, err.Error())
 					failedAttempts = append(failedAttempts, FailedSqlQueryAttempt{
 						// Compress the sql query to a single line
-						SqlQuery:     predictedQuery,
+						SqlQuery:     predictedSqlQuery,
 						ErrorMessage: stripNewlines(err.Error()),
 					})
 
@@ -273,7 +270,9 @@ func main() {
 				} else {
 					successfulSqlQuery = true
 					fmt.Printf("- Ground Truth Query: '%s'\n", item.SQL)
-					fmt.Printf("- Generated Query:    '%s'\n", predictedQuery)
+					fmt.Printf("- Generated Query:    '%s'\n", predictedSqlQuery)
+
+					sqlQueryComparison, err := compareSqlQueries(item.SQL, predictedSqlQuery, LLMevaluator, maxTokens, seed)
 
 					jsonRows, _ := rows2Json(rows)
 
@@ -294,38 +293,4 @@ func main() {
 			}
 		}
 	}
-}
-
-func predictSqlQueryFromNaturalLanguageQuery(llm llms.Model, maxTokens *int, systemPrompt string, query *string, seed int, failedAttempts []FailedSqlQueryAttempt) (string, error) {
-	// Modify the system prompt to include the history of failed attempts
-	//fmt.Printf("- Query: '%s'\n", *query)
-	if len(failedAttempts) > 0 {
-		systemPrompt += "\nTake into account the following past failed attempts at generating a new SQL query that avoids the same errors:\n"
-		for _, attempt := range failedAttempts {
-			systemPrompt += fmt.Sprintf("Generated failed sql query: '%s';\nError message explaining why it failed:\n'%s'\n", strings.ReplaceAll(attempt.SqlQuery, "\n", " "), strings.ReplaceAll(attempt.ErrorMessage, "\n", " "))
-		}
-	}
-
-	// print out system prompt
-	//fmt.Printf("- System Prompt:\n--------\n%s\n--------\n", strings.ReplaceAll(systemPrompt, "\n", " "))
-
-	ctx := context.Background()
-	options := []llms.CallOption{
-		llms.WithMaxTokens(*maxTokens),
-		llms.WithTemperature(0.0),
-	}
-	if seed != NO_SEED {
-		options = append(options, llms.WithSeed(seed))
-	}
-
-	start := time.Now()
-	response, err := llms.GenerateFromSinglePrompt(ctx, llm, systemPrompt+"\n"+*query, options...)
-	elapsed := time.Since(start)
-	fmt.Printf("- Query generation execution time: %s\n", elapsed)
-
-	if err != nil {
-		return "", err
-	}
-
-	return response, nil
 }
