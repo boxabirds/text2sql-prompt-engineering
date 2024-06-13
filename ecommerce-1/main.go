@@ -11,17 +11,10 @@ import (
 	"log"
 	"os"
 	"strings"
-
-	"github.com/sashabaranov/go-openai"
 )
 
-const GROUND_TRUTH_MD_FILE = "ground-truth.md"
-
-const DEFAULT_OPENAI_MODEL = "gpt-4-preview"
-const DEFAULT_OLLAMA_MODEL = "llama3:instruct"
-const OLLAMA_API_KEY = "ollama"
-const NO_SEED = -1
-
+const GroundTruthMdFile = "ground-truth.md"
+const NoSeed = -1
 const (
 	boldRed   = "\033[1;31m"
 	boldGreen = "\033[1;32m"
@@ -80,38 +73,38 @@ func loadGroundTruthCsv(filename string) ([]GroundTruthItem, error) {
 	return groundTruth, nil
 }
 
-func createOpenAiClient(baseUrl string, model *string) *openai.Client {
-	var apiKey string
-	if baseUrl == "" {
-		apiKey = os.Getenv("OPENAI_API_KEY")
-		if apiKey == "" {
-			log.Fatal("OPENAI_API_KEY not found in environment")
-		}
-		if *model == "" {
-			*model = DEFAULT_OPENAI_MODEL
-		}
-		fmt.Printf("Using default OpenAI API server\n")
-	} else {
-		//fmt.Printf("=== NOTE AS OF 28 May 2024 Ollama does not appear to use the seed to make output deterministic.===")
-		apiKey = OLLAMA_API_KEY
-		if *model == "" {
-			*model = DEFAULT_OLLAMA_MODEL
-		}
-		fmt.Printf("Using custom API server at: %s\n", baseUrl)
-		fmt.Printf("API Key set to Ollama\n")
-	}
-	fmt.Printf("Model being used: %s\n", *model)
+// func createOpenAiClient(baseUrl string, model *string) *openai.Client {
+// 	var apiKey string
+// 	if baseUrl == "" {
+// 		apiKey = os.Getenv("OPENAI_API_KEY")
+// 		if apiKey == "" {
+// 			log.Fatal("OPENAI_API_KEY not found in environment")
+// 		}
+// 		if *model == "" {
+// 			*model = DEFAULT_OPENAI_MODEL
+// 		}
+// 		fmt.Printf("Using default OpenAI API server\n")
+// 	} else {
+// 		//fmt.Printf("=== NOTE AS OF 28 May 2024 Ollama does not appear to use the seed to make output deterministic.===")
+// 		apiKey = OLLAMA_API_KEY
+// 		if *model == "" {
+// 			*model = DEFAULT_OLLAMA_MODEL
+// 		}
+// 		fmt.Printf("Using custom API server at: %s\n", baseUrl)
+// 		fmt.Printf("API Key set to Ollama\n")
+// 	}
+// 	fmt.Printf("Model being used: %s\n", *model)
 
-	config := openai.DefaultConfig(apiKey)
+// 	config := openai.DefaultConfig(apiKey)
 
-	// have to check twice because the config that's created and depends on it
-	// and yet needs to be changed again
-	if baseUrl != "" {
-		config.BaseURL = baseUrl
-	}
+// 	// have to check twice because the config that's created and depends on it
+// 	// and yet needs to be changed again
+// 	if baseUrl != "" {
+// 		config.BaseURL = baseUrl
+// 	}
 
-	return openai.NewClientWithConfig(config)
-}
+// 	return openai.NewClientWithConfig(config)
+// }
 
 // Take some Row rules and conver them to JSON format for easy parsing
 func rows2Json(rows *sql.Rows) (string, error) {
@@ -181,11 +174,10 @@ func stripNewlines(s string) string {
 
 func main() {
 	// deal with command line flags first
-
 	baseURL := flag.String("base-url", "", "Base URL for the API server")
 	maxTokens := flag.Int("max-tokens", 200, "Maximum number of tokens in the summary")
 	var seed int
-	flag.IntVar(&seed, "seed", NO_SEED, "Seed for deterministic results (optional)")
+	flag.IntVar(&seed, "seed", NoSeed, "Seed for deterministic (in theory) results (optional)")
 	flag.Parse()
 
 	llmClients := initialiseLLMClients(*baseURL)
@@ -206,45 +198,38 @@ func main() {
 	}
 
 	// ensure we have our ground truth MD file in a CSV file for easy processing
-	groundTruthCsvFile, err := convertMdWithSingleTableToCsv(GROUND_TRUTH_MD_FILE)
-	if err != nil {
-		log.Fatal(err)
+	groundTruthCsvFile, err := convertMdWithSingleTableToCsv(GroundTruthMdFile)
+	if err == nil {
+		log.Fatalf("Failed to convert MD to CSV: %v", err)
+		// load the ground truth
 	}
-	//fmt.Printf("Ensured we have a ground truth csv in '%s'\n", groundTruthCsvFile)
-
-	// load the ground truth
 	groundTruth, err := loadGroundTruthCsv(groundTruthCsvFile)
 	if err != nil {
 		log.Fatalf("Failed to load CSV: %v", err)
 	}
-
-	fmt.Printf("Loaded %d ground truth items\n", len(groundTruth))
+	//fmt.Printf("Loaded %d ground truth items\n", len(groundTruth))
 
 	// do the AI stuff to predict the SQL query from natural language
-	for _, llmInitializer := range llmClients {
-		fmt.Printf("\n\n=======================================\n")
-		fmt.Printf("Using model: %s %s\n", llmInitializer.Name, llmInitializer.Model)
-		client, err := llmInitializer.InitFunc()
-		if err != nil {
-			log.Fatalf("Failed to initialize model '%s', skipping: %v", llmInitializer.Model, err)
-			continue
-		}
 
-		systemPrompt := SQL_GENERATOR_API_SYSTEM_PROMPT + strings.Join(TABLES, "\n")
+	for _, llmClient := range llmClients {
+		fmt.Printf("\n\n=======================================\n")
+		fmt.Printf("Using model: %s %s\n", llmClient.Name, llmClient.Model)
+
+		systemPrompt := SqlGeneratorApiSystemPrompt + strings.Join(TABLES, "\n")
 
 		for _, item := range groundTruth {
 			var failedAttempts []FailedSqlQueryAttempt
 			var predictedSqlQuery string
 			var err error
-			fmt.Printf("\n==== %s: %s\n", llmInitializer.Name, llmInitializer.Model)
+			fmt.Printf("\n==== %s: %s\n", llmClient.Name, llmClient.Model)
 
 			successfulSqlQuery := false
 
-			for len(failedAttempts) <= MAX_RETRIES && !successfulSqlQuery {
+			for len(failedAttempts) <= MaxSqlGenerationFaultRetries && !successfulSqlQuery {
 				// predict the SQL query from the natural language query
 				// print out the natural query
 				fmt.Printf("Query: %s\n", item.Query)
-				predictedSqlQuery, err = predictSqlQueryFromNaturalLanguageQuery(client, maxTokens, systemPrompt, &item.Query, seed, failedAttempts)
+				predictedSqlQuery, err = predictSqlQueryFromNaturalLanguageQuery(llmClient.Instance, maxTokens, systemPrompt, &item.Query, seed, failedAttempts)
 				if err != nil {
 					log.Printf("Error predicting SQL for query '%s': %v\n", item.Query, err)
 					break
@@ -273,7 +258,10 @@ func main() {
 					fmt.Printf("- Generated Query:    '%s'\n", predictedSqlQuery)
 
 					sqlQueryComparison, err := compareSqlQueries(item.SQL, predictedSqlQuery, LLMevaluator, maxTokens, seed)
-
+					if err != nil {
+						log.Printf("Error comparing SQL queries: %v", err)
+					}
+					fmt.Printf("- SQL Query Comparison result: %s\n", sqlQueryComparison)
 					jsonRows, _ := rows2Json(rows)
 
 					fmt.Printf("- Ground Truth Result:%s\n", item.Result)
@@ -289,7 +277,7 @@ func main() {
 			}
 
 			if !successfulSqlQuery {
-				log.Printf("Failed to execute a valid query after %d attempts for query '%s'.", MAX_RETRIES+1, item.Query)
+				log.Printf("Failed to execute a valid query after %d attempts for query '%s'.", MaxSqlGenerationFaultRetries+1, item.Query)
 			}
 		}
 	}

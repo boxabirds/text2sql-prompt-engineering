@@ -24,7 +24,7 @@ const (
 	Open
 )
 
-const SERVICE_MODEL_SEPERATOR = " : "
+const ServiceModelSeperator = " : "
 
 type LLMClient struct {
 	Name                   string
@@ -35,16 +35,16 @@ type LLMClient struct {
 	Instance               llms.Model
 }
 
+type LLMClientsMap map[string]*LLMClient
+
 // Simple wrapper to get a specific named LLM initializer for whatever mischief we get up to with it.
-func getLLMClient(name, model string) *LLMClient {
-	key := fmt.Sprintf("%s%s%s", name, SERVICE_MODEL_SEPERATOR, model)
+func getLLMClient(name, model string, clientsMap LLMClientsMap) *LLMClient {
+	key := fmt.Sprintf("%s%s%s", name, ServiceModelSeperator, model)
 	return clientsMap[key]
 }
 
-// List of all the clients we use
-var clientsMap = make(map[string]*LLMClient)
+func initialiseLLMClients(localServerUrl string) map[string]*LLMClient {
 
-func initialiseLLMClients(localServerUrl string) []LLMClient {
 	clients := []LLMClient{
 		{
 			Name: "Ollama/OpenAI", Model: "llama3", WeightsAccess: Open, NumParameters: "8b", InputContextWindowSize: 8192,
@@ -245,5 +245,12 @@ func initialiseLLMClients(localServerUrl string) []LLMClient {
 			}(),
 		},
 	}
-	return clients
+
+	// convert them to a map for easy access
+	clientsMap := make(LLMClientsMap)
+	for _, client := range clients {
+		key := client.Name + ServiceModelSeperator + client.Model
+		clientsMap[key] = &client
+	}
+	return clientsMap
 }

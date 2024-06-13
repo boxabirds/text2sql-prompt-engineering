@@ -12,14 +12,14 @@ import (
 	"github.com/tmc/langchaingo/llms"
 )
 
-const SQL_GENERATOR_API_SYSTEM_PROMPT = `
+const SqlGeneratorApiSystemPrompt = `
 	You are a READ ONLY SQL SELECT Statement Generator API for the schema below ONLY. 
 	Generate only queries that access data, not modify it: 
 	no UPDATE, INSERT, DELETE or any other statements that attempt to change the data. 
 	Respond to questions in a way that can be interpreted programmatically: 
 	no extra narrative, punctuation, delimiters or escape sequences like backticks.\n`
 
-const SQL_COMPARISON_API_SYSTEM_PROMPT = `
+const SqlComparisonApiSystemPrompt = `
 	You are a SQL Statement comparator API: Take two SQL queries, a ground truth and a comparision, and compare them to determine
 	how similar they are, returning only a single word from this list: "None", "FunctionalSuperset", or "Functional"
 	
@@ -36,15 +36,16 @@ const SQL_COMPARISON_API_SYSTEM_PROMPT = `
 	then the comparison query is a functional superset of the ground truth query and the value "FunctionalSuperset" should be returned.
 	E.g. Query 1: SELECT "product_name", Query 2: SELECT "product_name", "product_price"
 
+	Rules for "None": output columns of comparison query is missing one or more columns included in the ground truth query
+
 	Respond to questions in a way that can be interpreted programmatically: 
 	NO extra narrative, punctuation, delimiters or escape sequences like backticks.\n\n
 `
-const QUERY_PROMPT_TEMPLATE = `
-	Ground truth sql statement: {{ground_truth_query}}
-	Comparison sql query: {{comparison_query}}
-`
+const QueryPromptTemplate = `
+	Ground truth sql statement: {{.GroundTruthQuery}}\n
+	Comparison sql query: {{.ComparisonQuery}}`
 
-const MAX_RETRIES = 2
+const MaxSqlGenerationFaultRetries = 2
 
 type SqlQueryEvaluationType string
 
@@ -57,11 +58,12 @@ const (
 
 func substituteTemplate(promptTemplate string, params map[string]string) string {
 	// Parse the template string
+	//promptTemplate = "Hello, {{.Name}}!"
 	tmpl, err := template.New("queryPrompt").Parse(promptTemplate)
 	if err != nil {
 		log.Fatalf("Error parsing template: %v", err)
 	}
-
+	tmpl.Option("missingkey=zero")
 	// Execute the template with parameters
 	var substituted bytes.Buffer
 	if err := tmpl.Execute(&substituted, params); err != nil {
@@ -71,8 +73,13 @@ func substituteTemplate(promptTemplate string, params map[string]string) string 
 	return substituted.String()
 }
 
-func compareSqlQueries(groundTruthSqlQuery string, comparisonQuery string, client *LLMClient, maxTokens *int, seed int) (SqlQueryEvaluationType, error) {
+// Takes a ground truth sql query and a comparison sql query and uses the evaluator
+// to appropriate match.
+func compareSqlQueries(groundTruthSqlQuery string, comparisonQuery string, evaluatorLLM *LLMClient, maxTokens *int, seed int) (SqlQueryEvaluationType, error) {
 
+	if evaluatorLLM == nil {
+		log.Fatal("evaluatorLLM cannot be nil")
+	}
 	// query2 is exactly the same as query1 which makes life easy
 	if groundTruthSqlQuery == comparisonQuery {
 		return ExactMatch, nil
@@ -82,18 +89,18 @@ func compareSqlQueries(groundTruthSqlQuery string, comparisonQuery string, clien
 		llms.WithMaxTokens(*maxTokens),
 		llms.WithTemperature(0.0),
 	}
-	if seed != NO_SEED {
+	if seed != NoSeed {
 		options = append(options, llms.WithSeed(seed))
 	}
 
 	// Substitute and print the result
-	comparisonPrompt := substituteTemplate(QUERY_PROMPT_TEMPLATE, map[string]string{
-		"ground_truth_query": groundTruthSqlQuery,
-		"comparison_query":   comparisonQuery,
+	comparisonPrompt := substituteTemplate(QueryPromptTemplate, map[string]string{
+		"GroundTruthQuery": groundTruthSqlQuery,
+		"ComparisonQuery":  comparisonQuery,
 	})
 
 	start := time.Now()
-	response, err := llms.GenerateFromSinglePrompt(ctx, client.Instance, SQL_COMPARISON_API_SYSTEM_PROMPT+comparisonPrompt, options...)
+	response, err := llms.GenerateFromSinglePrompt(ctx, evaluatorLLM.Instance, SqlComparisonApiSystemPrompt+comparisonPrompt, options...)
 	elapsed := time.Since(start)
 	fmt.Printf("- compareSqlQueries generation execution time: %s\n", elapsed)
 
@@ -123,7 +130,7 @@ func predictSqlQueryFromNaturalLanguageQuery(llm llms.Model, maxTokens *int, sys
 		llms.WithMaxTokens(*maxTokens),
 		llms.WithTemperature(0.0),
 	}
-	if seed != NO_SEED {
+	if seed != NoSeed {
 		options = append(options, llms.WithSeed(seed))
 	}
 
