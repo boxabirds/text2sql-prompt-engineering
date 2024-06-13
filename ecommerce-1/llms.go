@@ -40,6 +40,12 @@ type LLMClientsMap map[string]*LLMClient
 // Simple wrapper to get a specific named LLM initializer for whatever mischief we get up to with it.
 func getLLMClient(name, model string, clientsMap LLMClientsMap) *LLMClient {
 	key := fmt.Sprintf("%s%s%s", name, ServiceModelSeperator, model)
+	fmt.Printf("- Looking up key %s\n", key)
+	client := clientsMap[key]
+	if client == nil {
+		log.Fatalf("Error: could not find client for %s", key)
+	}
+	fmt.Printf("- Found client %v\n", client)
 	return clientsMap[key]
 }
 
@@ -57,36 +63,36 @@ func initialiseLLMClients(localServerUrl string) map[string]*LLMClient {
 				return model
 			}(),
 		},
-		{
-			Name: "Groq", Model: "llama3-8b-8192", WeightsAccess: Open, NumParameters: "8b", InputContextWindowSize: 8192,
-			Instance: func() llms.Model {
-				model, err := openai.New(
-					openai.WithModel("llama3-8b-8192"),
-					openai.WithBaseURL("https://api.groq.com/openai/v1"),
-					openai.WithToken(os.Getenv("GROQ_API_KEY")),
-				)
-				if err != nil {
-					log.Printf("Error initializing model %s: %v", "llama3-8b-8192", err)
-					return nil
-				}
-				return model
-			}(),
-		},
-		{
-			Name: "Groq", Model: "llama3-70b-8192", WeightsAccess: Open, NumParameters: "70b", InputContextWindowSize: 8192,
-			Instance: func() llms.Model {
-				model, err := openai.New(
-					openai.WithModel("llama3-70b-8192"),
-					openai.WithBaseURL("https://api.groq.com/openai/v1"),
-					openai.WithToken(os.Getenv("GROQ_API_KEY")),
-				)
-				if err != nil {
-					log.Printf("Error initializing model %s: %v", "llama3-70b-8192", err)
-					return nil
-				}
-				return model
-			}(),
-		},
+		// {
+		// 	Name: "Groq", Model: "llama3-8b-8192", WeightsAccess: Open, NumParameters: "8b", InputContextWindowSize: 8192,
+		// 	Instance: func() llms.Model {
+		// 		model, err := openai.New(
+		// 			openai.WithModel("llama3-8b-8192"),
+		// 			openai.WithBaseURL("https://api.groq.com/openai/v1"),
+		// 			openai.WithToken(os.Getenv("GROQ_API_KEY")),
+		// 		)
+		// 		if err != nil {
+		// 			log.Printf("Error initializing model %s: %v", "llama3-8b-8192", err)
+		// 			return nil
+		// 		}
+		// 		return model
+		// 	}(),
+		// },
+		// {
+		// 	Name: "Groq", Model: "llama3-70b-8192", WeightsAccess: Open, NumParameters: "70b", InputContextWindowSize: 8192,
+		// 	Instance: func() llms.Model {
+		// 		model, err := openai.New(
+		// 			openai.WithModel("llama3-70b-8192"),
+		// 			openai.WithBaseURL("https://api.groq.com/openai/v1"),
+		// 			openai.WithToken(os.Getenv("GROQ_API_KEY")),
+		// 		)
+		// 		if err != nil {
+		// 			log.Printf("Error initializing model %s: %v", "llama3-70b-8192", err)
+		// 			return nil
+		// 		}
+		// 		return model
+		// 	}(),
+		// },
 		// {
 		// 	Name: "Mistral", Model: "llama3-70b-8192", WeightsAccess: Open, NumParameters: "70b", InputContextWindowSize: 8192,
 		// 	Instance: func() llms.Model {

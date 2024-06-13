@@ -1,0 +1,15 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug ecommerce-1",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/ecommerce-1",
+            "cwd": "${workspaceFolder}/ecommerce-1",
+            "env": {},
+            "args": []
+        }
+    ]
+}

@@ -199,7 +199,7 @@ func main() {
 
 	// ensure we have our ground truth MD file in a CSV file for easy processing
 	groundTruthCsvFile, err := convertMdWithSingleTableToCsv(GroundTruthMdFile)
-	if err == nil {
+	if err != nil {
 		log.Fatalf("Failed to convert MD to CSV: %v", err)
 		// load the ground truth
 	}

@@ -6,7 +6,9 @@ toolchain go1.22.4
 
 require (
 	github.com/mattn/go-sqlite3 v1.14.22
-	github.com/sashabaranov/go-openai v1.24.1
+	github.com/russross/blackfriday/v2 v2.1.0
+	github.com/stretchr/testify v1.9.0
+	github.com/tmc/langchaingo v0.1.10
 )
 
 require (
@@ -24,7 +26,6 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
-	github.com/gomarkdown/markdown v0.0.0-20240419095408-642f0ee99ae2 // indirect
 	github.com/google/generative-ai-go v0.11.0 // indirect
 	github.com/google/s2a-go v0.1.7 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -33,10 +34,6 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pkoukk/tiktoken-go v0.1.6 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/russross/blackfriday/v2 v2.1.0 // indirect
-	github.com/stretchr/testify v1.9.0 // indirect
-	github.com/tmc/langchaingo v0.1.10 // indirect
-	github.com/yuin/goldmark v1.7.1 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.49.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.49.0 // indirect
