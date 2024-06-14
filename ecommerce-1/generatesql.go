@@ -59,15 +59,15 @@ const QueryPromptTemplate = `
 	Ground truth sql statement: {{.GroundTruthQuery}}\n
 	Comparison sql query: {{.ComparisonQuery}}`
 
-const MaxSqlGenerationFaultRetries = 2
+const MaxSqlGenerationFaultRetries = 3
 
 type SqlQueryEvaluationType string
 
 const (
-	NoMatch                 SqlQueryEvaluationType = "None"
-	FunctionalSupersetMatch SqlQueryEvaluationType = "FunctionalSuperset" // second query has everything the first query has with extra fields that can be ignored
-	FunctionalMatch         SqlQueryEvaluationType = "Functional"         // sql queries might not have the same output columns but the the columns have the same meaning
-	ExactMatch              SqlQueryEvaluationType = "Exact"              // sql queries are character by character identical
+	NoMatch SqlQueryEvaluationType = "None"
+	//FunctionalSupersetMatch SqlQueryEvaluationType = "FunctionalSuperset" // second query has everything the first query has with extra fields that can be ignored
+	FunctionalMatch SqlQueryEvaluationType = "Functional" // sql queries might not have the same output columns but the the columns have the same meaning
+	ExactMatch      SqlQueryEvaluationType = "Exact"      // sql queries are character by character identical
 )
 
 func substituteTemplate(promptTemplate string, params map[string]string) string {
@@ -85,6 +85,9 @@ func substituteTemplate(promptTemplate string, params map[string]string) string 
 	}
 
 	return substituted.String()
+}
+func standardizeSpaces(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // Takes a ground truth sql query and a comparison sql query and uses the evaluator
@@ -132,8 +135,9 @@ func predictSqlQueryFromNaturalLanguageQuery(llm llms.Model, maxTokens *int, sys
 	if len(failedAttempts) > 0 {
 		systemPrompt += "\nTake into account the following past failed attempts at generating a new SQL query that avoids the same errors:\n"
 		for _, attempt := range failedAttempts {
-			systemPrompt += fmt.Sprintf("Generated failed sql query: '%s';\nError message explaining why it failed:\n'%s'\n", strings.ReplaceAll(attempt.SqlQuery, "\n", " "), strings.ReplaceAll(attempt.ErrorMessage, "\n", " "))
+			systemPrompt += fmt.Sprintf("- Generated failed sql query: '%s';\nError message explaining why it failed:\n'%s'\n", standardizeSpaces(attempt.SqlQuery), strings.ReplaceAll(attempt.ErrorMessage, "\n", " "))
 		}
+		fmt.Printf("- Failed attempt %d:\n- System Prompt:\n--------\n%s\n---------\n\n", len(failedAttempts), systemPrompt)
 	}
 
 	// print out system prompt

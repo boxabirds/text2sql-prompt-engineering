@@ -188,7 +188,7 @@ func main() {
 	}
 
 	// for our evaluation we use one of the SOTA models
-	LLMevaluator := getLLMClient("Ollama/OpenAI", "phi3:medium", llmClients)
+	LLMevaluator := getLLMClient("Ollama/OpenAI", "llama3", llmClients)
 	fmt.Printf("Evaluator selected %s %s\n", LLMevaluator.Name, LLMevaluator.Model)
 
 	// ensure our db exists and has the content we want to test against

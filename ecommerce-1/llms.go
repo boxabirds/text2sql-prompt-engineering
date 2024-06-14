@@ -1,15 +1,13 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
-	"os"
 
 	"github.com/tmc/langchaingo/llms"
-	"github.com/tmc/langchaingo/llms/anthropic"
-	"github.com/tmc/langchaingo/llms/cohere"
-	"github.com/tmc/langchaingo/llms/googleai"
+	_ "github.com/tmc/langchaingo/llms/anthropic"
+	_ "github.com/tmc/langchaingo/llms/cohere"
+	_ "github.com/tmc/langchaingo/llms/googleai"
 	_ "github.com/tmc/langchaingo/llms/huggingface"
 	_ "github.com/tmc/langchaingo/llms/llamafile"
 	_ "github.com/tmc/langchaingo/llms/mistral"
@@ -108,100 +106,133 @@ func initialiseLLMClients(localServerUrl string) map[string]*LLMClient {
 		// 		return model
 		// 	}(),
 		// },
+		// {
+		// 	Name: "Ollama/OpenAI", Model: "codestral-22B-v0.1", WeightsAccess: Open, NumParameters: "22b", InputContextWindowSize: 32768,
+		// 	Instance: func() llms.Model {
+		// 		model, err := openai.New(openai.WithModel("codestral"), openai.WithBaseURL(localServerUrl))
+		// 		if err != nil {
+		// 			log.Printf("Error initializing model %s: %v", "codestral-22B-v0.1", err)
+		// 			return nil
+		// 		}
+		// 		return model
+		// 	}(),
+		// },
+		// {
+		// 	Name: "Ollama/OpenAI", Model: "qwen2:0.5b", WeightsAccess: Open, NumParameters: "0.5b", InputContextWindowSize: 32768,
+		// 	Instance: func() llms.Model {
+		// 		model, err := openai.New(openai.WithModel("qwen2:0.5b"), openai.WithBaseURL(localServerUrl))
+		// 		if err != nil {
+		// 			log.Printf("Error initializing model %s: %v", "qwen2:0.5b", err)
+		// 			return nil
+		// 		}
+		// 		return model
+		// 	}(),
+		// },
 		{
-			Name: "Ollama/OpenAI", Model: "codestral-22B-v0.1", WeightsAccess: Open, NumParameters: "22b", InputContextWindowSize: 32768,
+			Name: "Ollama/OpenAI", Model: "qwen2:1.5b", WeightsAccess: Open, NumParameters: "1.5b", InputContextWindowSize: 32768,
 			Instance: func() llms.Model {
-				model, err := openai.New(openai.WithModel("codestral"), openai.WithBaseURL(localServerUrl))
+				model, err := openai.New(openai.WithModel("qwen2:1.5b"), openai.WithBaseURL(localServerUrl))
 				if err != nil {
-					log.Printf("Error initializing model %s: %v", "codestral-22B-v0.1", err)
+					log.Printf("Error initializing model %s: %v", "qwen2:1.5b", err)
 					return nil
 				}
 				return model
 			}(),
 		},
-		{
-			Name: "Ollama/OpenAI", Model: "phi3:mini", WeightsAccess: Open, NumParameters: "3.8b", InputContextWindowSize: 4096,
-			Instance: func() llms.Model {
-				model, err := openai.New(openai.WithModel("phi3:mini"), openai.WithBaseURL(localServerUrl))
-				if err != nil {
-					log.Printf("Error initializing model %s: %v", "phi3:mini", err)
-					return nil
-				}
-				return model
-			}(),
-		},
-		{
-			Name: "Ollama/OpenAI", Model: "phi3:medium", WeightsAccess: Open, NumParameters: "14b", InputContextWindowSize: 4096,
-			Instance: func() llms.Model {
-				model, err := openai.New(openai.WithModel("phi3:medium"), openai.WithBaseURL(localServerUrl))
-				if err != nil {
-					log.Printf("Error initializing model %s: %v", "phi3:medium", err)
-					return nil
-				}
-				return model
-			}(),
-		},
-		{
-			Name: "Ollama/OpenAI", Model: "phi3:medium-128k", WeightsAccess: Open, NumParameters: "14b", InputContextWindowSize: 131072,
-			Instance: func() llms.Model {
-				model, err := openai.New(openai.WithModel("phi3:medium-128k"), openai.WithBaseURL(localServerUrl))
-				if err != nil {
-					log.Printf("Error initializing model %s: %v", "phi3:medium-128k", err)
-					return nil
-				}
-				return model
-			}(),
-		},
-		{
-			Name: "Cohere", Model: "Command-R+", WeightsAccess: Open, NumParameters: "104b", InputContextWindowSize: 131072,
-			Instance: func() llms.Model {
-				model, err := cohere.New(
-					cohere.WithModel("command-r-plus"),
-					cohere.WithToken(os.Getenv("COHERE_API_KEY")),
-				)
-				if err != nil {
-					log.Printf("Error initializing model %s: %v", "Command-R+", err)
-					return nil
-				}
-				return model
-			}(),
-		},
-		{
-			Name: "Anthropic", Model: "claude-3-haiku-20240307", WeightsAccess: Closed, NumParameters: "?", InputContextWindowSize: 4096,
-			Instance: func() llms.Model {
-				model, err := anthropic.New(anthropic.WithModel("claude-3-haiku-20240307"))
-				if err != nil {
-					log.Printf("Error initializing model %s: %v", "claude-3-haiku-20240307", err)
-					return nil
-				}
-				return model
-			}(),
-		},
-		{
-			Name: "Anthropic", Model: "claude-3-sonnet-20240229", WeightsAccess: Closed, NumParameters: "?", InputContextWindowSize: 4096,
-			Instance: func() llms.Model {
-				model, err := anthropic.New(anthropic.WithModel("claude-3-sonnet-20240229"))
-				if err != nil {
-					log.Printf("Error initializing model %s: %v", "claude-3-sonnet-20240229", err)
-					return nil
-				}
-				return model
-			}(),
-		},
-		{
-			Name: "Google AI", Model: "Gemini Flash 1.5", WeightsAccess: Closed, NumParameters: "?", InputContextWindowSize: 1048576,
-			Instance: func() llms.Model {
-				apiKey := os.Getenv("GEMINI_API_KEY")
-				model, err := googleai.New(context.Background(),
-					googleai.WithAPIKey(apiKey),
-					googleai.WithDefaultModel("gemini-1.5-flash-001"))
-				if err != nil {
-					log.Printf("Error initializing model %s: %v", "Gemini Flash 1.5", err)
-					return nil
-				}
-				return model
-			}(),
-		},
+		// {
+		// 	Name: "Ollama/OpenAI", Model: "qwen2:7b", WeightsAccess: Open, NumParameters: "7b", InputContextWindowSize: 131072,
+		// 	Instance: func() llms.Model {
+		// 		model, err := openai.New(openai.WithModel("qwen2:7b"), openai.WithBaseURL(localServerUrl))
+		// 		if err != nil {
+		// 			log.Printf("Error initializing model %s: %v", "qwen2:7b", err)
+		// 			return nil
+		// 		}
+		// 		return model
+		// 	}(),
+		// },
+		// {
+		// 	Name: "Ollama/OpenAI", Model: "phi3:mini", WeightsAccess: Open, NumParameters: "3.8b", InputContextWindowSize: 4096,
+		// 	Instance: func() llms.Model {
+		// 		model, err := openai.New(openai.WithModel("phi3:mini"), openai.WithBaseURL(localServerUrl))
+		// 		if err != nil {
+		// 			log.Printf("Error initializing model %s: %v", "phi3:mini", err)
+		// 			return nil
+		// 		}
+		// 		return model
+		// 	}(),
+		// },
+		// {
+		// 	Name: "Ollama/OpenAI", Model: "phi3:medium", WeightsAccess: Open, NumParameters: "14b", InputContextWindowSize: 4096,
+		// 	Instance: func() llms.Model {
+		// 		model, err := openai.New(openai.WithModel("phi3:medium"), openai.WithBaseURL(localServerUrl))
+		// 		if err != nil {
+		// 			log.Printf("Error initializing model %s: %v", "phi3:medium", err)
+		// 			return nil
+		// 		}
+		// 		return model
+		// 	}(),
+		// },
+		// {
+		// 	Name: "Ollama/OpenAI", Model: "phi3:medium-128k", WeightsAccess: Open, NumParameters: "14b", InputContextWindowSize: 131072,
+		// 	Instance: func() llms.Model {
+		// 		model, err := openai.New(openai.WithModel("phi3:medium-128k"), openai.WithBaseURL(localServerUrl))
+		// 		if err != nil {
+		// 			log.Printf("Error initializing model %s: %v", "phi3:medium-128k", err)
+		// 			return nil
+		// 		}
+		// 		return model
+		// 	}(),
+		// },
+		// {
+		// 	Name: "Cohere", Model: "Command-R+", WeightsAccess: Open, NumParameters: "104b", InputContextWindowSize: 131072,
+		// 	Instance: func() llms.Model {
+		// 		model, err := cohere.New(
+		// 			cohere.WithModel("command-r-plus"),
+		// 			cohere.WithToken(os.Getenv("COHERE_API_KEY")),
+		// 		)
+		// 		if err != nil {
+		// 			log.Printf("Error initializing model %s: %v", "Command-R+", err)
+		// 			return nil
+		// 		}
+		// 		return model
+		// 	}(),
+		// },
+		// {
+		// 	Name: "Anthropic", Model: "claude-3-haiku-20240307", WeightsAccess: Closed, NumParameters: "?", InputContextWindowSize: 4096,
+		// 	Instance: func() llms.Model {
+		// 		model, err := anthropic.New(anthropic.WithModel("claude-3-haiku-20240307"))
+		// 		if err != nil {
+		// 			log.Printf("Error initializing model %s: %v", "claude-3-haiku-20240307", err)
+		// 			return nil
+		// 		}
+		// 		return model
+		// 	}(),
+		// },
+		// {
+		// 	Name: "Anthropic", Model: "claude-3-sonnet-20240229", WeightsAccess: Closed, NumParameters: "?", InputContextWindowSize: 4096,
+		// 	Instance: func() llms.Model {
+		// 		model, err := anthropic.New(anthropic.WithModel("claude-3-sonnet-20240229"))
+		// 		if err != nil {
+		// 			log.Printf("Error initializing model %s: %v", "claude-3-sonnet-20240229", err)
+		// 			return nil
+		// 		}
+		// 		return model
+		// 	}(),
+		// },
+		// {
+		// 	Name: "Google AI", Model: "Gemini Flash 1.5", WeightsAccess: Closed, NumParameters: "?", InputContextWindowSize: 1048576,
+		// 	Instance: func() llms.Model {
+		// 		apiKey := os.Getenv("GEMINI_API_KEY")
+		// 		model, err := googleai.New(context.Background(),
+		// 			googleai.WithAPIKey(apiKey),
+		// 			googleai.WithDefaultModel("gemini-1.5-flash-001"))
+		// 		if err != nil {
+		// 			log.Printf("Error initializing model %s: %v", "Gemini Flash 1.5", err)
+		// 			return nil
+		// 		}
+		// 		return model
+		// 	}(),
+		// },
 		// {
 		// 	Name: "HuggingFace", Model: "Meta-Llama-3-8B", WeightsAccess: Open, NumParameters: "8b", InputContextWindowSize: 8192,
 		// 	Instance: func() llms.Model {
@@ -239,17 +270,17 @@ func initialiseLLMClients(localServerUrl string) map[string]*LLMClient {
 		// 		return model
 		// 	}(),
 		// },
-		{
-			Name: "OpenAI GPT-4-turbo-preview", Model: "gpt-4-turbo-preview", WeightsAccess: Open, NumParameters: "?", InputContextWindowSize: 8192,
-			Instance: func() llms.Model {
-				model, err := openai.New(openai.WithModel("gpt-4-turbo-preview"))
-				if err != nil {
-					log.Printf("Error initializing model %s: %v", "gpt-4-turbo-preview", err)
-					return nil
-				}
-				return model
-			}(),
-		},
+		// {
+		// 	Name: "OpenAI GPT-4-turbo-preview", Model: "gpt-4-turbo-preview", WeightsAccess: Open, NumParameters: "?", InputContextWindowSize: 8192,
+		// 	Instance: func() llms.Model {
+		// 		model, err := openai.New(openai.WithModel("gpt-4-turbo-preview"))
+		// 		if err != nil {
+		// 			log.Printf("Error initializing model %s: %v", "gpt-4-turbo-preview", err)
+		// 			return nil
+		// 		}
+		// 		return model
+		// 	}(),
+		// },
 	}
 
 	// convert them to a map for easy access
